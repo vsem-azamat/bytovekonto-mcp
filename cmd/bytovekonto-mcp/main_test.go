@@ -38,12 +38,18 @@ func TestMissingUser(t *testing.T) {
 
 func TestSecondServerIsLockedOut(t *testing.T) {
 	dir := t.TempDir()
-	unlock, err := lockStateDir(dir)
+	unlock, err := lockStateDir(dir, serveLock)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer unlock()
-	if _, err := lockStateDir(dir); err == nil {
+	if _, err := lockStateDir(dir, serveLock); err == nil {
 		t.Fatal("a second lock on the same state directory succeeded")
 	}
+	// the watcher has its own token and lock
+	unlockWatch, err := lockStateDir(dir, watchLock)
+	if err != nil {
+		t.Fatalf("the watcher was locked out by the server: %v", err)
+	}
+	unlockWatch()
 }

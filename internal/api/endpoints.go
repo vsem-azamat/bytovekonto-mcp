@@ -74,7 +74,7 @@ func (c *Client) TicketOptions(ctx context.Context) (*TicketOptions, error) {
 // CreateTicket sends a new ticket to the management and returns it as created.
 func (c *Client) CreateTicket(ctx context.Context, t NewTicket) (*Ticket, error) {
 	if t.Attachments == nil {
-		t.Attachments = []string{}
+		t.Attachments = []File{}
 	}
 	if t.Actions == nil {
 		t.Actions = []string{}
@@ -83,9 +83,12 @@ func (c *Client) CreateTicket(ctx context.Context, t NewTicket) (*Ticket, error)
 	return &out, c.post(ctx, "/tickets", t, &out)
 }
 
-// AddComment posts a message to a ticket and returns the new comment.
-func (c *Client) AddComment(ctx context.Context, ticketID int64, message string) (*Comment, error) {
-	body := NewComment{Message: message, Attachments: []string{}}
+// AddComment posts a message, with optional attachments, to a ticket and returns the new comment.
+func (c *Client) AddComment(ctx context.Context, ticketID int64, message string, files []File) (*Comment, error) {
+	if files == nil {
+		files = []File{}
+	}
+	body := NewComment{Message: message, Attachments: files}
 	var out Comment
 	return &out, c.post(ctx, "/tickets/"+strconv.FormatInt(ticketID, 10)+"/comment", body, &out)
 }
@@ -120,6 +123,16 @@ func (c *Client) Payment(ctx context.Context, id int64) (*PaymentDetail, error) 
 	return &out, c.get(ctx, "/payments/"+strconv.FormatInt(id, 10), nil, &out)
 }
 
+// PaymentQRCodes returns QR codes to pay the documents (one code may cover several). The request
+// is a POST but changes nothing.
+func (c *Client) PaymentQRCodes(ctx context.Context, documentIDs []int64) ([]PaymentQR, error) {
+	if documentIDs == nil {
+		documentIDs = []int64{}
+	}
+	var out []PaymentQR
+	return out, c.post(ctx, "/payments/multiQR", documentIDs, &out)
+}
+
 // PaymentsOverview sums the payments: past due, due, paid, overpaid, and per month.
 func (c *Client) PaymentsOverview(ctx context.Context) (*PaymentsOverview, error) {
 	var out PaymentsOverview
@@ -131,6 +144,15 @@ func (c *Client) Costs(ctx context.Context, from, to, granularity string) (*Cost
 	v := url.Values{"from": {from}, "to": {to}, "granularity": {granularity}}
 	var out Costs
 	return &out, c.get(ctx, "/costs", v, &out)
+}
+
+// CompareCosts compares the account's costs per delivery between two dates (YYYY-MM-DD) with the
+// previous period, a year ago and the averages. The app sends the period and the granularity
+// with the same value.
+func (c *Client) CompareCosts(ctx context.Context, from, to, granularity string) (*CostComparison, error) {
+	v := url.Values{"from": {from}, "to": {to}, "period": {granularity}, "granularity": {granularity}}
+	var out CostComparison
+	return &out, c.get(ctx, "/costs/compare", v, &out)
 }
 
 // Rent is the current rent.
@@ -201,4 +223,10 @@ func (c *Client) NotificationCount(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("notifications: %w", err)
 	}
 	return n, nil
+}
+
+// Me is the logged-in user.
+func (c *Client) Me(ctx context.Context) (*Me, error) {
+	var out Me
+	return &out, c.get(ctx, "/subject/me", nil, &out)
 }

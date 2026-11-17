@@ -32,9 +32,11 @@ Reviews fix real defects (behaviour, security, broken contracts, code/docs drift
 
 | Path | Contents |
 | --- | --- |
-| `cmd/bytovekonto-mcp/` | The binary: subcommands, environment, state-directory lock |
+| `cmd/bytovekonto-mcp/` | The binary: subcommands (`watch` and its sinks too), environment, state-directory locks |
 | `internal/api/` | API client: OAuth2 login, token cache and refresh, typed endpoint calls |
-| `internal/server/` | The MCP tools: reads, document download, the two writes with preview and audit |
+| `internal/server/` | The MCP tools: reads, document download, payment QR codes, cost comparison, the two writes with preview, attachments, repeated-send guard and audit |
+| `internal/watch/` | The change watcher behind `bytovekonto-mcp watch` |
+| `internal/text/` | Announcement HTML to plain text |
 | `internal/fakeapi/` | Fake API with made-up data for tests |
 | `docs/` | How it works, configuration, tools, write rules, operations |
 | `scripts/` | Repository policy (`repo-check.sh`) and the pre-commit hook (`hooks/`) |

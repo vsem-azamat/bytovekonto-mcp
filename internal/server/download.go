@@ -69,7 +69,7 @@ func (s *Server) downloadDocument(ctx context.Context, _ *mcp.CallToolRequest, i
 	}
 	out := map[string]any{"document": viewDocument(*doc), "size": len(data), "content_type": mimeType}
 	if s.opts.DownloadDir != "" {
-		path, err := s.save(doc, data)
+		path, err := s.saveFile(safeFileName(doc.ID, doc.FileMeta.Filename), data)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -96,11 +96,12 @@ func (s *Server) downloadDocument(ctx context.Context, _ *mcp.CallToolRequest, i
 	return res, out, nil
 }
 
-func (s *Server) save(doc *api.Document, data []byte) (string, error) {
+// saveFile writes data to a sanitised file name in the download directory.
+func (s *Server) saveFile(name string, data []byte) (string, error) {
 	if err := os.MkdirAll(s.opts.DownloadDir, 0o700); err != nil {
 		return "", fmt.Errorf("download directory: %w", err)
 	}
-	path := filepath.Join(s.opts.DownloadDir, safeFileName(doc.ID, doc.FileMeta.Filename))
+	path := filepath.Join(s.opts.DownloadDir, name)
 	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, data) { //nolint:gosec // the name is sanitised and joined to the configured directory
 		return path, nil
 	}

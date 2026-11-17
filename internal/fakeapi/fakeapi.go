@@ -51,11 +51,13 @@ type Server struct {
 	Refreshes      int
 	Calls          map[string]int
 	Writes         []Created
+	QRRequests     [][]any
 
-	access  map[string]bool
-	refresh map[string]bool
-	seq     int
-	nextID  int64
+	fixtures map[string]string
+	access   map[string]bool
+	refresh  map[string]bool
+	seq      int
+	nextID   int64
 }
 
 // New starts a fake API; close it with Close.
@@ -63,6 +65,10 @@ func New() *Server {
 	s := &Server{
 		AccessTTL: 10 * time.Minute, Now: time.Now, Calls: map[string]int{},
 		access: map[string]bool{}, refresh: map[string]bool{}, nextID: 9000,
+		fixtures: make(map[string]string, len(fixtures)),
+	}
+	for k, v := range fixtures {
+		s.fixtures[k] = v
 	}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.handle))
 	return s
@@ -108,7 +114,16 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, DocumentContent)
 		return
 	}
-	body, ok := fixtures[path]
+	if path == "/costs/compare" {
+		q := r.URL.Query()
+		for _, k := range []string{"from", "to", "period", "granularity"} {
+			if q.Get(k) == "" {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"errors": []map[string]any{{"code": "UnknownErrorWithMessage", "message": "Required request parameter '" + k + "' is not present"}}})
+				return
+			}
+		}
+	}
+	body, ok := s.fixtures[path]
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]any{"status": 404, "error": "Not Found", "message": "No static resource " + path})
 		return
@@ -166,12 +181,21 @@ func jwt(id string, exp time.Time) string {
 }
 
 func (s *Server) write(w http.ResponseWriter, r *http.Request, path string) {
-	var body map[string]any
+	var body any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "malformed JSON"})
 		return
 	}
-	s.Writes = append(s.Writes, Created{Path: path, Body: body})
+	if path == "/payments/multiQR" {
+		s.multiQR(w, body)
+		return
+	}
+	obj, ok := body.(map[string]any)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "JSON parse error: expected an object"})
+		return
+	}
+	s.Writes = append(s.Writes, Created{Path: path, Body: obj})
 	if s.FailWrites != 0 {
 		writeJSON(w, s.FailWrites, map[string]any{"message": "write failed"})
 		return
@@ -181,7 +205,7 @@ func (s *Server) write(w http.ResponseWriter, r *http.Request, path string) {
 	switch {
 	case path == "/tickets":
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id": s.nextID, "createdAt": now, "modifiedAt": now, "subject": body["subject"], "description": body["description"],
+			"id": s.nextID, "createdAt": now, "modifiedAt": now, "subject": obj["subject"], "description": obj["description"],
 			"ticketState": "NEW", "ticketPriority": "NORMAL", "ticketCategory": "Fault", "ticketArea": "Other",
 			"tags":      []string{"USER_IS_CREATOR", "STATE_OPEN"},
 			"relations": []map[string]any{{"entityType": "PROJECT", "entityId": "500", "label": "Example House"}, {"entityType": "OBJECT", "entityId": "701", "label": "A101"}},
@@ -192,10 +216,53 @@ func (s *Server) write(w http.ResponseWriter, r *http.Request, path string) {
 			writeJSON(w, http.StatusNotFound, map[string]any{"message": "ticket not found"})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"id": s.nextID, "createdAt": now, "creatorSubjectId": 1, "creatorSubjectName": "Jana Example", "text": body["message"]})
+		writeJSON(w, http.StatusOK, map[string]any{"id": s.nextID, "createdAt": now, "creatorSubjectId": 1, "creatorSubjectName": "Jana Example", "text": obj["message"]})
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]any{"message": "not found"})
 	}
+}
+
+// multiQR answers POST /app/payments/multiQR: one QR code for the listed documents to pay. The
+// API refuses anything but a JSON array of document ids.
+func (s *Server) multiQR(w http.ResponseWriter, body any) {
+	list, ok := body.([]any)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"message": "JSON parse error: Cannot deserialize value of type `java.util.ArrayList<java.lang.Long>` from Object value"})
+		return
+	}
+	s.QRRequests = append(s.QRRequests, list)
+	docs := []json.RawMessage{}
+	var all []json.RawMessage
+	_ = json.Unmarshal([]byte(s.fixtures["/payments"]), &all)
+	for _, id := range list {
+		for _, d := range all {
+			var p struct {
+				ID float64 `json:"id"`
+			}
+			if json.Unmarshal(d, &p) == nil && p.ID == id {
+				docs = append(docs, d)
+			}
+		}
+	}
+	if len(docs) == 0 {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, []map[string]any{{"qrPaymentPNGBase64": QRPNG, "documents": docs}})
+}
+
+// SetFixture replaces the answer of GET /app<path>.
+func (s *Server) SetFixture(path, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fixtures[path] = body
+}
+
+// QRRequestList returns the id lists of the multiQR requests received.
+func (s *Server) QRRequestList() [][]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([][]any(nil), s.QRRequests...)
 }
 
 // Configure changes the fake's settings (AccessTTL, RefuseRefresh, Revoked, Now) safely.

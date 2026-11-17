@@ -20,6 +20,7 @@ type harness struct {
 	fake    *fakeapi.Server
 	session *mcp.ClientSession
 	dir     string
+	attach  string
 }
 
 func start(t *testing.T) *harness {
@@ -30,9 +31,8 @@ func start(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	now := func() time.Time { return time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC) }
-	srv := server.New(c, server.Options{Now: now, DownloadDir: dir})
+	dir, attach := t.TempDir(), t.TempDir()
+	srv := server.New(c, server.Options{Now: func() time.Time { return testNow }, DownloadDir: dir, AttachDirs: []string{attach}})
 	st, ct := mcp.NewInMemoryTransports()
 	ss, err := srv.MCP().Connect(t.Context(), st, nil)
 	if err != nil {
@@ -45,8 +45,10 @@ func start(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cs.Close() })
-	return &harness{fake: f, session: cs, dir: dir}
+	return &harness{fake: f, session: cs, dir: dir, attach: attach}
 }
+
+var testNow = time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
 
 // call runs a tool and returns its structured result, or the error text when the tool failed.
 func (h *harness) call(t *testing.T, name string, args map[string]any) (map[string]any, string) {
@@ -94,6 +96,7 @@ func TestToolsAreListed(t *testing.T) {
 		"home_overview": true, "building_info": true, "list_tickets": true, "get_ticket": true, "ticket_options": true,
 		"list_payments": true, "get_payment": true, "payments_overview": true, "costs": true, "list_meters": true, "get_meter": true,
 		"list_documents": true, "download_document": true, "notifications": true, "create_ticket": true, "comment_ticket": true,
+		"payment_qr": true, "compare_costs": true,
 	}
 	for _, tool := range res.Tools {
 		if !want[tool.Name] {
