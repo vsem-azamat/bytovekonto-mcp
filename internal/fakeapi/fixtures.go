@@ -3,6 +3,12 @@ package fakeapi
 // DocumentContent is the body of every downloaded document.
 const DocumentContent = "%PDF-1.4 example house rules\n"
 
+// QRPNG is the base64 of a 1x1 PNG, standing in for a payment QR code.
+const QRPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+// MeID is the subject id of the fake's user.
+const MeID = 1
+
 // fixtures are the GET answers by path, shaped like the real API's, with made-up data: one
 // tenant of flat A101 in "Example House", two own tickets and one public ticket of the building.
 var fixtures = map[string]string{
@@ -72,6 +78,14 @@ var fixtures = map[string]string{
 		"dataByChannel":{"P+ T1":{"totalConsumption":200.0,"consumptions":[120.0,80.0],"startValue":1034.5,"endValue":1234.5,"unit":"kWh","partialData":[],"measuredValues":[]}},"coefficients":{}}`,
 
 	"/documents/myProject": `[{"id":"doc-1","name":"House rules","type":"FILE","fileId":"f1","fileMeta":{"id":"f1","filename":"../house rules.pdf","size":29,"contentType":"application/pdf","relatedEntities":[],"uploadedBySubjectId":10,"uploadedBySubjectName":"Example Manager","createdAt":"2026-01-01T00:00:00Z"},"category":{"id":1,"code":"RULES","name":"Rules","nameUnaccented":"Rules"},"createdAt":"2026-01-01T00:00:00Z","modifiedAt":"2026-01-02T00:00:00Z"}]`,
+
+	"/subject/me": `{"id":1,"login":"resident@example.com","anonymized":false,"data":[{"type":"PERSON","personData":{"firstName":"Jana","lastName":"Example"}}]}`,
+
+	"/costs/compare": `{"currency":"CZK","currencyLocalized":"Kč","comparisons":[
+		{"deliveryId":2,"objectId":701,"type":"PREVIOUS_PERIOD","available":true,"note":null,"from":"2026-01-01","to":"2026-01-31","totalUntil":null,"totalCost":40.5,"totalConsumption":0.25,"consumptionUnit":"kWh","periodCost":[40.5],"periodConsumption":[0.25]},
+		{"deliveryId":2,"objectId":701,"type":"YEAR_AGO","available":false,"note":"Insufficient data for comparison","from":"2025-02-01","to":"2025-02-28","totalUntil":null,"totalCost":0,"totalConsumption":0,"consumptionUnit":null,"periodCost":[],"periodConsumption":[]},
+		{"deliveryId":2,"objectId":701,"type":"PROJECT_AVG","available":true,"note":null,"from":"2026-02-01","to":"2026-02-28","totalUntil":null,"totalCost":820.25,"totalConsumption":5.2,"consumptionUnit":"kWh","periodCost":[820.25],"periodConsumption":[5.2]},
+		{"deliveryId":3,"objectId":701,"type":"PREVIOUS_PERIOD","available":true,"note":null,"from":"2026-01-01","to":"2026-01-31","totalUntil":null,"totalCost":350,"totalConsumption":36.4,"consumptionUnit":"kWh","periodCost":[350],"periodConsumption":[36.4]}]}`,
 
 	"/notifications/count": `2`,
 

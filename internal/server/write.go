@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -23,22 +24,26 @@ const (
 	maxSubjectRunes  = 200
 	maxTextRunes     = 10000
 	ownUnitPreferred = "FLAT"
+	// duplicateWindow is how long an identical ticket or comment counts as a repeated send.
+	duplicateWindow = 15 * time.Minute
 )
 
 type createTicketIn struct {
-	Category    string `json:"category" jsonschema:"what kind of ticket: FAULT (something is broken), ACCIDENT (damage or danger), REQUEST, QUESTION, COMPLAINT, SUGGESTION, ORDER, SERVICE, CATEGORY_OTHER; code or name as ticket_options lists them"`
-	Area        string `json:"area,omitempty" jsonschema:"the area code or name from ticket_options (default AREA_OTHER), e.g. EQUIPMENT, ENERGIES, PAYMENTS"`
-	Unit        string `json:"unit,omitempty" jsonschema:"what the ticket is about: a unit id or name from ticket_options (default: the user's own flat), e.g. the cellar, the entrance or the building"`
-	Subject     string `json:"subject" jsonschema:"a short title"`
-	Description string `json:"description" jsonschema:"the message to the management, with a greeting and the user's name as signature"`
-	Private     bool   `json:"private,omitempty" jsonschema:"only the user and the management see the ticket (default false, as the app sends it)"`
-	Confirm     bool   `json:"confirm,omitempty" jsonschema:"false (default): return a preview and send nothing; true: send it. Set true only after the user approved the preview"`
+	Category    string         `json:"category" jsonschema:"what kind of ticket: FAULT (something is broken), ACCIDENT (damage or danger), REQUEST, QUESTION, COMPLAINT, SUGGESTION, ORDER, SERVICE, CATEGORY_OTHER; code or name as ticket_options lists them"`
+	Area        string         `json:"area,omitempty" jsonschema:"the area code or name from ticket_options (default AREA_OTHER), e.g. EQUIPMENT, ENERGIES, PAYMENTS"`
+	Unit        string         `json:"unit,omitempty" jsonschema:"what the ticket is about: a unit id or name from ticket_options (default: the user's own flat), e.g. the cellar, the entrance or the building"`
+	Subject     string         `json:"subject" jsonschema:"a short title"`
+	Description string         `json:"description" jsonschema:"the message to the management, with a greeting and the user's name as signature"`
+	Private     bool           `json:"private,omitempty" jsonschema:"only the user and the management see the ticket (default false, as the app sends it)"`
+	Attachments []attachmentIn `json:"attachments,omitempty" jsonschema:"photos or PDFs to attach (at most 5, 10 MiB each, 20 MiB together)"`
+	Confirm     bool           `json:"confirm,omitempty" jsonschema:"false (default): return a preview and send nothing; true: send it. Set true only after the user approved the preview"`
 }
 
 type commentIn struct {
-	TicketID int64  `json:"ticket_id" jsonschema:"the ticket to answer"`
-	Message  string `json:"message" jsonschema:"the message to post in the ticket's conversation"`
-	Confirm  bool   `json:"confirm,omitempty" jsonschema:"false (default): return a preview and send nothing; true: send it. Set true only after the user approved the preview"`
+	TicketID    int64          `json:"ticket_id" jsonschema:"the ticket to answer"`
+	Message     string         `json:"message" jsonschema:"the message to post in the ticket's conversation"`
+	Attachments []attachmentIn `json:"attachments,omitempty" jsonschema:"photos or PDFs to attach (at most 5, 10 MiB each, 20 MiB together)"`
+	Confirm     bool           `json:"confirm,omitempty" jsonschema:"false (default): return a preview and send nothing; true: send it. Set true only after the user approved the preview"`
 }
 
 func sendTool(title string) *mcp.ToolAnnotations {
@@ -175,14 +180,31 @@ func (s *Server) createTicket(ctx context.Context, req *mcp.CallToolRequest, in 
 	if err != nil {
 		return nil, nil, err
 	}
+	files, attached, err := s.attachments(in.Attachments)
+	if err != nil {
+		return nil, nil, err
+	}
 	body := api.NewTicket{
-		Subject: subject, Description: desc, CategoryID: cat.ID, AreaID: area.ID, Private: in.Private,
+		Subject: subject, Description: desc, CategoryID: cat.ID, AreaID: area.ID, Private: in.Private, Attachments: files,
 		RelatedEntities: []api.RelatedEntity{{EntityType: api.EntityObject, EntityID: strconv.FormatInt(unit.ID, 10)}},
 	}
 	preview := map[string]any{
 		"category": cat.Name, "area": area.Name, "unit": unit.Name, "unit_id": unit.ID, "subject": subject, "description": desc, "private": in.Private,
+		"attachments": attached,
+	}
+	dup, err := s.recentTicket(ctx, subject)
+	if err != nil {
+		return nil, nil, err
 	}
 	client := clientName(req)
+	if dup != nil {
+		msg := fmt.Sprintf("an own ticket with this subject (%d) was created at %s: it may be this one sent already; check it with get_ticket, and change the subject if a second ticket is really wanted", dup.ID, dup.CreatedAt)
+		if in.Confirm {
+			s.log.Warn("write", "tool", "create_ticket", "client", client, "subject", subject, "outcome", "duplicate", "ticket", dup.ID)
+			return nil, nil, errors.New(msg)
+		}
+		preview["warning"] = msg
+	}
 	if !in.Confirm {
 		return nil, map[string]any{
 			"sent": false, "preview": preview,
@@ -195,7 +217,7 @@ func (s *Server) createTicket(ctx context.Context, req *mcp.CallToolRequest, in 
 		s.log.Warn("write", "tool", "create_ticket", "client", client, "unit", unit.Name, "subject", subject, "outcome", outcome, "err", err.Error())
 		return nil, nil, fmt.Errorf("%s: %w", msg, err)
 	}
-	s.log.Info("write", "tool", "create_ticket", "client", client, "unit", unit.Name, "category", cat.Code, "subject", subject, "ticket", t.ID, "outcome", "ok")
+	s.log.Info("write", "tool", "create_ticket", "client", client, "unit", unit.Name, "category", cat.Code, "subject", subject, "attachments", len(files), "ticket", t.ID, "outcome", "ok")
 	return nil, map[string]any{"sent": true, "ticket": viewTicket(*t, true)}, nil
 }
 
@@ -214,24 +236,85 @@ func (s *Server) commentTicket(ctx context.Context, req *mcp.CallToolRequest, in
 	if t.NoComments {
 		return nil, nil, errors.New("this ticket does not take comments")
 	}
+	files, attached, err := s.attachments(in.Attachments)
+	if err != nil {
+		return nil, nil, err
+	}
 	v := viewTicket(*t, false)
-	preview := map[string]any{"ticket": map[string]any{"id": v.ID, "subject": v.Subject, "state": v.State, "own": v.Own}, "message": msg}
+	preview := map[string]any{"ticket": map[string]any{"id": v.ID, "subject": v.Subject, "state": v.State, "own": v.Own}, "message": msg, "attachments": attached}
 	if !v.Own {
 		preview["note"] = "this is another resident's ticket: the message is visible to its members"
 	}
+	dup, err := s.recentComment(ctx, in.TicketID, msg)
+	if err != nil {
+		return nil, nil, err
+	}
 	client := clientName(req)
+	if dup != nil {
+		text := fmt.Sprintf("the user posted the same message in this ticket at %s: it may be this one sent already; check it with get_ticket, and change the text if it is really wanted twice", dup.CreatedAt)
+		if in.Confirm {
+			s.log.Warn("write", "tool", "comment_ticket", "client", client, "ticket", in.TicketID, "outcome", "duplicate", "comment", dup.ID)
+			return nil, nil, errors.New(text)
+		}
+		preview["warning"] = text
+	}
 	if !in.Confirm {
 		return nil, map[string]any{
 			"sent": false, "preview": preview,
 			"next": "show this preview to the user; after they approve it, call comment_ticket again with the same arguments and confirm true",
 		}, nil
 	}
-	c, err := s.api.AddComment(ctx, in.TicketID, msg)
+	c, err := s.api.AddComment(ctx, in.TicketID, msg, files)
 	if err != nil {
 		outcome, text := writeFailure(err, "the comment was not posted", "get_ticket")
 		s.log.Warn("write", "tool", "comment_ticket", "client", client, "ticket", in.TicketID, "outcome", outcome, "err", err.Error())
 		return nil, nil, fmt.Errorf("%s: %w", text, err)
 	}
-	s.log.Info("write", "tool", "comment_ticket", "client", client, "ticket", in.TicketID, "comment", c.ID, "outcome", "ok")
+	s.log.Info("write", "tool", "comment_ticket", "client", client, "ticket", in.TicketID, "comment", c.ID, "attachments", len(files), "outcome", "ok")
 	return nil, map[string]any{"sent": true, "ticket_id": in.TicketID, "comment": message{At: c.CreatedAt, Author: c.CreatorName, Text: strings.TrimSpace(c.Text)}}, nil
+}
+
+// recent reports whether an API time lies within the duplicate window before now.
+func (s *Server) recent(at string) bool {
+	t, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil {
+		return false
+	}
+	age := s.opts.Now().Sub(t)
+	return age >= -duplicateWindow && age <= duplicateWindow
+}
+
+// recentTicket is an own ticket with the subject created within the duplicate window, if any.
+func (s *Server) recentTicket(ctx context.Context, subject string) (*api.Ticket, error) {
+	ts, err := s.api.Tickets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range ts {
+		t := &ts[i]
+		if t.HasTag(api.TagUserIsCreator) && strings.EqualFold(strings.TrimSpace(t.Subject), subject) && s.recent(t.CreatedAt) {
+			return t, nil
+		}
+	}
+	return nil, nil
+}
+
+// recentComment is the user's own comment of the ticket with the text posted within the
+// duplicate window, if any.
+func (s *Server) recentComment(ctx context.Context, ticketID int64, text string) (*api.Comment, error) {
+	me, err := s.api.Me(ctx)
+	if err != nil {
+		return nil, err
+	}
+	lc, err := s.api.TicketLifecycle(ctx, ticketID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range lc.Comments {
+		c := &lc.Comments[i]
+		if c.CreatorID == me.ID && c.DeletedAt == nil && strings.TrimSpace(c.Text) == text && s.recent(c.CreatedAt) {
+			return c, nil
+		}
+	}
+	return nil, nil
 }

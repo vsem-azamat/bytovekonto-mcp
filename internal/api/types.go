@@ -282,16 +282,23 @@ type NewTicket struct {
 	CategoryID      int64           `json:"categoryId"`
 	AreaID          int64           `json:"areaId"`
 	RelatedEntities []RelatedEntity `json:"relatedEntities"`
-	Attachments     []string        `json:"attachments"`
+	Attachments     []File          `json:"attachments"`
 	Actions         []string        `json:"actions"`
 	Private         bool            `json:"privateTicket"`
 }
 
+// File is an attachment of a new ticket or comment, as the apps send it: the content in standard
+// base64.
+type File struct {
+	Content  string `json:"content"`
+	FileName string `json:"fileName"`
+}
+
 // NewComment is the body of POST /app/tickets/{id}/comment.
 type NewComment struct {
-	Message                     string   `json:"message"`
-	Attachments                 []string `json:"attachments"`
-	SetIgnoreMemberCountWarning *bool    `json:"setIgnoreMemberCountWarning"`
+	Message                     string `json:"message"`
+	Attachments                 []File `json:"attachments"`
+	SetIgnoreMemberCountWarning *bool  `json:"setIgnoreMemberCountWarning"`
 }
 
 // Payment filters of GET /app/payments.
@@ -404,6 +411,7 @@ type Costs struct {
 		Label string `json:"label"`
 	} `json:"periods"`
 	Deliveries []struct {
+		DeliveryID         int64     `json:"deliveryId"`
 		Label              string    `json:"label"`
 		Category           string    `json:"category"`
 		CategoryDefinition string    `json:"categoryDefinition"`
@@ -501,4 +509,43 @@ type Document struct {
 // Notifications are the user's in-app notifications (GET /app/notifications/list).
 type Notifications struct {
 	Notifications []json.RawMessage `json:"notifications"`
+}
+
+// Me is the logged-in user (GET /app/subject/me).
+type Me struct {
+	ID int64 `json:"id"`
+}
+
+// PaymentQR is a QR code to pay accounting documents with a banking app
+// (an item of POST /app/payments/multiQR).
+type PaymentQR struct {
+	PNGBase64 string    `json:"qrPaymentPNGBase64"`
+	Documents []Payment `json:"documents"`
+}
+
+// Comparison types of GET /app/costs/compare.
+const (
+	ComparePreviousPeriod = "PREVIOUS_PERIOD"
+	CompareYearAgo        = "YEAR_AGO"
+	CompareProjectAverage = "PROJECT_AVG"
+	CompareGlobalAverage  = "GLOBAL_AVG"
+)
+
+// CostComparison compares a delivery's cost in a period with the previous period, the same period
+// a year ago, the building's average and the average of all buildings (GET /app/costs/compare).
+type CostComparison struct {
+	Currency    string `json:"currency"`
+	Comparisons []struct {
+		DeliveryID        int64     `json:"deliveryId"`
+		Type              string    `json:"type"`
+		Available         bool      `json:"available"`
+		Note              *string   `json:"note"`
+		From              string    `json:"from"`
+		To                string    `json:"to"`
+		TotalCost         float64   `json:"totalCost"`
+		TotalConsumption  float64   `json:"totalConsumption"`
+		ConsumptionUnit   *string   `json:"consumptionUnit"`
+		PeriodCost        []float64 `json:"periodCost"`
+		PeriodConsumption []float64 `json:"periodConsumption"`
+	} `json:"comparisons"`
 }

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/vsem-azamat/bytovekonto-mcp/internal/api"
+	"github.com/vsem-azamat/bytovekonto-mcp/internal/text"
 )
 
 const (
@@ -267,28 +266,10 @@ func datePart(s string) string {
 	return s
 }
 
-var (
-	tagRE   = regexp.MustCompile(`(?s)<[^>]*>`)
-	blockRE = regexp.MustCompile(`(?i)<\s*(br|/p|/div|/li|/h[1-6])\s*/?>`)
-	spaceRE = regexp.MustCompile(`[ \t]+`)
-	linesRE = regexp.MustCompile(`\n\s*\n+`)
-)
-
-// htmlText turns an announcement's HTML into plain text.
-func htmlText(s string) string {
-	s = blockRE.ReplaceAllString(s, "\n")
-	s = tagRE.ReplaceAllString(s, "")
-	s = html.UnescapeString(s)
-	s = strings.ReplaceAll(s, "\u00a0", " ")
-	s = spaceRE.ReplaceAllString(s, " ")
-	s = linesRE.ReplaceAllString(s, "\n")
-	return strings.TrimSpace(s)
-}
-
 func announcements(boxes []api.Infobox) []string {
 	out := []string{}
 	for _, b := range boxes {
-		if t := htmlText(b.HTMLContent); t != "" {
+		if t := text.HTML(b.HTMLContent); t != "" {
 			if b.LinkURL != nil && *b.LinkURL != "" {
 				t += " (" + *b.LinkURL + ")"
 			}
@@ -714,16 +695,22 @@ func (s *Server) dateRange(from, to string) (string, string, error) {
 	return from, to, nil
 }
 
-func (s *Server) costs(ctx context.Context, _ *mcp.CallToolRequest, in costsIn) (*mcp.CallToolResult, any, error) {
-	gran := api.GranularityMonth
-	switch strings.ToLower(strings.TrimSpace(in.Granularity)) {
+func costsGranularity(g string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(g)) {
 	case "", "month":
+		return api.GranularityMonth, nil
 	case "week":
-		gran = api.GranularityWeek
+		return api.GranularityWeek, nil
 	case "day":
-		gran = api.GranularityDay
-	default:
-		return nil, nil, errors.New("granularity must be day, week or month")
+		return api.GranularityDay, nil
+	}
+	return "", errors.New("granularity must be day, week or month")
+}
+
+func (s *Server) costs(ctx context.Context, _ *mcp.CallToolRequest, in costsIn) (*mcp.CallToolResult, any, error) {
+	gran, err := costsGranularity(in.Granularity)
+	if err != nil {
+		return nil, nil, err
 	}
 	from, to, err := s.dateRange(in.From, in.To)
 	if err != nil {

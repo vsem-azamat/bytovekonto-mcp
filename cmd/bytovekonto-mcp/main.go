@@ -28,6 +28,10 @@ const usage = `bytovekonto-mcp: an MCP server (stdio) for a resident's Bytové k
 Usage:
   bytovekonto-mcp [serve]  run the MCP server on stdin/stdout
   bytovekonto-mcp check    log in and print a short summary of the account (no changes)
+  bytovekonto-mcp watch [-once] [-interval 30m] [-exec CMD]
+                           report what changed since the last check (new messages in the
+                           user's tickets, announcements, documents to pay, ...) as JSON lines
+                           on stdout, or run CMD for each change with the event on its stdin
   bytovekonto-mcp logout   delete the cached token
   bytovekonto-mcp version  print the version
 
@@ -37,8 +41,10 @@ Environment:
                              (or BYTOVEKONTO_PASSWORD_FILE: a file holding it)
   BYTOVEKONTO_URL            API base URL (default https://admin.bytovekonto.cz)
   BYTOVEKONTO_STATE_DIR      where the token is cached (default $XDG_STATE_HOME/bytovekonto-mcp)
-  BYTOVEKONTO_DOWNLOAD_DIR   where download_document saves files
+  BYTOVEKONTO_DOWNLOAD_DIR   where download_document and payment_qr save files
                              (default $XDG_DATA_HOME/bytovekonto-mcp/documents; "-" disables saving)
+  BYTOVEKONTO_ATTACH_DIRS    absolute directories (separated by ':') the writes may attach files
+                             from by path (default none: attachments are sent inline only)
   BYTOVEKONTO_LOG_LEVEL      debug, info (default), warn or error
 `
 
@@ -58,7 +64,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "help", "-h", "-help", "--help":
 		fmt.Fprint(stdout, usage)
 		return 0
-	case "serve", "check", "logout":
+	case "serve", "check", "logout", "watch":
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
 		return 2
@@ -73,16 +79,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	defer stop()
 
 	switch cmd {
+	case "watch":
+		return watchCmd(ctx, cfg, log, args[1:], stdout, stderr)
 	case "check":
 		// next to a running server, use its token without replacing it
-		if unlock, err := lockStateDir(cfg.stateDir); err == nil {
+		if unlock, err := lockStateDir(cfg.stateDir, serveLock); err == nil {
 			defer unlock()
 		} else {
 			cfg.tokenReadOnly = true
 		}
 		return check(ctx, cfg, log, stdout)
 	case "logout":
-		unlock, err := lockStateDir(cfg.stateDir)
+		unlock, err := lockStateDir(cfg.stateDir, serveLock)
 		if err != nil {
 			fmt.Fprintln(stderr, "logout:", err, "(stop the server first)")
 			return 1
@@ -108,6 +116,7 @@ type config struct {
 	stateDir            string
 	tokenFile           string
 	downloadDir         string
+	attachDirs          []string
 	tokenReadOnly       bool
 	level               slog.Level
 }
@@ -151,6 +160,15 @@ func loadConfig(needUser bool) (config, error) {
 	default:
 		c.downloadDir = d
 	}
+	for _, d := range filepath.SplitList(os.Getenv("BYTOVEKONTO_ATTACH_DIRS")) {
+		if d = strings.TrimSpace(d); d == "" {
+			continue
+		}
+		if !filepath.IsAbs(d) {
+			return c, fmt.Errorf("BYTOVEKONTO_ATTACH_DIRS: %q is not an absolute path", d)
+		}
+		c.attachDirs = append(c.attachDirs, filepath.Clean(d))
+	}
 	lvl := os.Getenv("BYTOVEKONTO_LOG_LEVEL")
 	if lvl == "" || c.level.UnmarshalText([]byte(lvl)) != nil {
 		c.level = slog.LevelInfo
@@ -170,7 +188,7 @@ func newClient(cfg config, log *slog.Logger) (*api.Client, error) {
 }
 
 func serve(ctx context.Context, cfg config, log *slog.Logger, stdin io.Reader, stdout io.Writer) int {
-	unlock, err := lockStateDir(cfg.stateDir)
+	unlock, err := lockStateDir(cfg.stateDir, serveLock)
 	if err != nil {
 		log.Error("cannot start", "err", err.Error())
 		return 1
@@ -181,7 +199,7 @@ func serve(ctx context.Context, cfg config, log *slog.Logger, stdin io.Reader, s
 		log.Error("cannot start", "err", err.Error())
 		return 1
 	}
-	srv := server.New(client, server.Options{Logger: log.With("component", "server"), Version: version, DownloadDir: cfg.downloadDir})
+	srv := server.New(client, server.Options{Logger: log.With("component", "server"), Version: version, DownloadDir: cfg.downloadDir, AttachDirs: cfg.attachDirs})
 	log.Info("serving", "version", version)
 	err = srv.MCP().Run(ctx, &mcp.IOTransport{Reader: io.NopCloser(stdin), Writer: nopWriteCloser{stdout}})
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
