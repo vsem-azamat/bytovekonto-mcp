@@ -28,7 +28,7 @@
 
 Each event is a JSON object with `kind`, a stable `key`, `title`, `text` and the fields that apply (`at`, `author`, `ticket_id`, `state`, `payment_id`, `document_id`, …). Without `-exec`, events are printed as JSON lines on stdout. With `-exec CMD`, `/bin/sh -c CMD` runs once per event with the event on stdin and its kind in `BYTOVEKONTO_EVENT_KIND` (the password variables are not passed on); a command that fails or runs over 2 minutes stops the run, and that event and the ones after it are reported again next time.
 
-The first run only remembers what is there and reports nothing. What has been reported is kept in `watch.json` in the state directory; deleting it starts over. The watcher keeps its own token (`watch-token.json`), so it runs next to the server without disturbing its login.
+The first run only remembers what is there and reports nothing. A ticket whose conversation the API refuses (4xx) is skipped with a warning and tried again next run; other errors fail the run. What has been reported is kept in `watch.json` in the state directory; deleting it starts over. The watcher keeps its own token (`watch-token.json`), so it runs next to the server without disturbing its login.
 
 Example: a systemd user timer that hands each change to a notification script.
 

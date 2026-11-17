@@ -251,7 +251,7 @@ func (s *Server) commentTicket(ctx context.Context, req *mcp.CallToolRequest, in
 	}
 	client := clientName(req)
 	if dup != nil {
-		text := fmt.Sprintf("the same message was posted in this ticket at %s: it may be this one sent already; check it with get_ticket, and change the text if it is really wanted twice", dup.CreatedAt)
+		text := fmt.Sprintf("the user posted the same message in this ticket at %s: it may be this one sent already; check it with get_ticket, and change the text if it is really wanted twice", dup.CreatedAt)
 		if in.Confirm {
 			s.log.Warn("write", "tool", "comment_ticket", "client", client, "ticket", in.TicketID, "outcome", "duplicate", "comment", dup.ID)
 			return nil, nil, errors.New(text)
@@ -299,16 +299,20 @@ func (s *Server) recentTicket(ctx context.Context, subject string) (*api.Ticket,
 	return nil, nil
 }
 
-// recentComment is a comment of the ticket with the text posted within the duplicate window,
-// if any.
+// recentComment is the user's own comment of the ticket with the text posted within the
+// duplicate window, if any.
 func (s *Server) recentComment(ctx context.Context, ticketID int64, text string) (*api.Comment, error) {
+	me, err := s.api.Me(ctx)
+	if err != nil {
+		return nil, err
+	}
 	lc, err := s.api.TicketLifecycle(ctx, ticketID)
 	if err != nil {
 		return nil, err
 	}
 	for i := range lc.Comments {
 		c := &lc.Comments[i]
-		if c.DeletedAt == nil && strings.TrimSpace(c.Text) == text && s.recent(c.CreatedAt) {
+		if c.CreatorID == me.ID && c.DeletedAt == nil && strings.TrimSpace(c.Text) == text && s.recent(c.CreatedAt) {
 			return c, nil
 		}
 	}

@@ -144,3 +144,23 @@ func TestFailedDeliveryIsRetried(t *testing.T) {
 		t.Errorf("delivered %v, want each announcement once", got)
 	}
 }
+
+func TestNewOwnTicketAndRefusedTicket(t *testing.T) {
+	r := newRig(t)
+	r.run(t)
+	// a ticket the user created since: its earlier messages from others are new, its state is not
+	newTicket := `{"id":3005,"createdAt":"2026-03-11T08:00:00Z","subject":"Door bell","ticketState":"IN_PROGRESS","tags":["USER_IS_CREATOR"],"lastCommentCreatedAt":"2026-03-11T09:00:00Z"}`
+	// a ticket whose conversation the API refuses (no fixture: 404)
+	refused := `{"id":3006,"createdAt":"2026-03-11T08:30:00Z","subject":"Gone","ticketState":"NEW","tags":["USER_IS_CREATOR"],"lastCommentCreatedAt":"2026-03-11T09:00:00Z"}`
+	r.fake.SetFixture("/tickets/list-with-last-comment", ticketList("IN_PROGRESS", "2026-03-02T10:00:00Z", newTicket, refused))
+	r.fake.SetFixture("/tickets/3005/lifecycle", `{"comments":[{"id":40,"createdAt":"2026-03-11T08:00:00Z","creatorSubjectId":1,"creatorSubjectName":"Jana Example","text":"It does not ring."},{"id":41,"createdAt":"2026-03-11T09:00:00Z","creatorSubjectId":21,"creatorSubjectName":"Tom Technician","text":"Checking today."}],"history":[]}`)
+	r.fake.SetFixture("/project/infoboxes", `[{"id":-501,"htmlContent":"<p>Hi</p>"}]`)
+	got := r.run(t)
+	if k := kinds(got); k != "ticket_message,announcement" || got[0].Text != "Checking today." {
+		t.Fatalf("events = %+v", got)
+	}
+	r.fake.SetFixture("/tickets/3006/lifecycle", `{"comments":[{"id":50,"createdAt":"2026-03-11T09:00:00Z","creatorSubjectId":21,"creatorSubjectName":"Tom Technician","text":"Back."}],"history":[]}`)
+	if got := r.run(t); kinds(got) != "ticket_message" || got[0].TicketID != 3006 {
+		t.Fatalf("the skipped ticket was not retried: %+v", got)
+	}
+}

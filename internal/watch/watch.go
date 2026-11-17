@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -60,6 +61,7 @@ type Watcher struct {
 	API       *api.Client
 	StateFile string
 	Now       func() time.Time
+	Log       *slog.Logger // optional
 }
 
 // state is what the watcher has seen: keys of reported or known items, and per key a value
@@ -146,6 +148,15 @@ func (w *Watcher) collect(ctx context.Context, st *state) ([]item, error) {
 			continue
 		}
 		msgs, err := w.messages(ctx, t, me.ID, st.Seen[lcKey])
+		var apiErr *api.Error
+		if errors.As(err, &apiErr) && apiErr.Status >= 400 && apiErr.Status < 500 {
+			// one ticket the API refuses must not hold back the others' events: it is
+			// skipped without its marker, so it is tried again next run
+			if w.Log != nil {
+				w.Log.Warn("ticket skipped", "ticket", t.ID, "err", err.Error())
+			}
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -162,7 +173,7 @@ func (w *Watcher) collect(ctx context.Context, st *state) ([]item, error) {
 		if body == "" {
 			continue
 		}
-		sum := sha256.Sum256([]byte(b.HTMLContent))
+		sum := sha256.Sum256([]byte(body))
 		items = append(items, item{key: "announcement:" + id(b.ID) + ":" + hex.EncodeToString(sum[:8]), event: &Event{
 			Kind: KindAnnouncement, Title: firstLine(body), Text: body,
 		}})

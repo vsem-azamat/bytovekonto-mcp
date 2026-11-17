@@ -29,8 +29,12 @@ var attachmentTypes = map[string]bool{
 	"image/jpeg": true, "image/png": true, "image/gif": true, "image/webp": true, "image/bmp": true, "application/pdf": true,
 }
 
-// heifExtensions are photo formats http.DetectContentType does not know.
-var heifExtensions = map[string]string{".heic": "image/heic", ".heif": "image/heif"}
+// heifBrands are the ISO media file brands of HEIC/HEIF photos, which http.DetectContentType
+// does not know.
+var heifBrands = map[string]string{
+	"heic": "image/heic", "heix": "image/heic", "hevc": "image/heic", "heim": "image/heic", "heis": "image/heic",
+	"mif1": "image/heif", "msf1": "image/heif",
+}
 
 type attachmentIn struct {
 	Path          string `json:"path,omitempty" jsonschema:"an absolute path of a file on the server's host, inside a directory BYTOVEKONTO_ATTACH_DIRS allows"`
@@ -63,7 +67,7 @@ func (s *Server) attachments(in []attachmentIn) ([]api.File, []attachmentView, e
 		if total > maxAttachmentsTotal {
 			return nil, nil, fmt.Errorf("the attachments are larger than %d MiB together", maxAttachmentsTotal>>20)
 		}
-		typ, err := attachmentType(name, data)
+		typ, err := attachmentType(data)
 		if err != nil {
 			return nil, nil, fmt.Errorf("attachment %d (%s): %w", i+1, name, err)
 		}
@@ -130,18 +134,32 @@ func (s *Server) readAllowed(path string) ([]byte, error) {
 		if err != nil || !filepath.IsLocal(rel) {
 			continue
 		}
-		f, err := os.OpenInRoot(dir, rel)
-		if err != nil {
-			return nil, fmt.Errorf("cannot read the file: %w", errors.Unwrap(err))
-		}
-		defer f.Close()
-		st, err := f.Stat()
-		if err != nil || !st.Mode().IsRegular() {
-			return nil, errors.New("not a regular file")
-		}
-		return io.ReadAll(io.LimitReader(f, maxAttachmentBytes+1))
+		return readInRoot(dir, rel)
 	}
 	return nil, errors.New("the file is not inside a directory BYTOVEKONTO_ATTACH_DIRS allows")
+}
+
+// readInRoot reads a regular file inside dir; the root refuses paths and symbolic links that
+// lead out of it, and the type is checked before opening, so a FIFO cannot block the call.
+func readInRoot(dir, rel string) ([]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("attachment directory: %w", errors.Unwrap(err))
+	}
+	defer root.Close()
+	st, err := root.Stat(rel)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the file: %w", errors.Unwrap(err))
+	}
+	if !st.Mode().IsRegular() {
+		return nil, errors.New("not a regular file")
+	}
+	f, err := root.Open(rel)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the file: %w", errors.Unwrap(err))
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, maxAttachmentBytes+1))
 }
 
 // attachmentName is the file name the management sees: a plain base name.
@@ -154,9 +172,12 @@ func attachmentName(name string) string {
 	return name
 }
 
-func attachmentType(name string, data []byte) (string, error) {
-	if t, ok := heifExtensions[strings.ToLower(filepath.Ext(name))]; ok {
-		return t, nil
+// attachmentType judges a file by its content, never by its name.
+func attachmentType(data []byte) (string, error) {
+	if len(data) >= 12 && string(data[4:8]) == "ftyp" {
+		if t, ok := heifBrands[string(data[8:12])]; ok {
+			return t, nil
+		}
 	}
 	t := http.DetectContentType(data)
 	if i := strings.IndexByte(t, ';'); i >= 0 {

@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,7 +27,7 @@ type paymentQRIn struct {
 }
 
 type compareCostsIn struct {
-	From        string `json:"from,omitempty" jsonschema:"first day, YYYY-MM-DD (default the first day of last month)"`
+	From        string `json:"from,omitempty" jsonschema:"first day, YYYY-MM-DD (default the first day of the month of to, or of last month)"`
 	To          string `json:"to,omitempty" jsonschema:"last day, YYYY-MM-DD (default the last day of the month of from)"`
 	Granularity string `json:"granularity,omitempty" jsonschema:"day, week or month (default)"`
 }
@@ -67,7 +69,7 @@ func (s *Server) paymentQR(ctx context.Context, _ *mcp.CallToolRequest, in payme
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
 	if len(ids) > maxQRDocuments {
-		return nil, nil, fmt.Errorf("at most %d documents at once", maxQRDocuments)
+		return nil, nil, fmt.Errorf("at most %d documents at once: give ids from list_payments", maxQRDocuments)
 	}
 	for _, id := range ids {
 		if id <= 0 {
@@ -98,9 +100,9 @@ func (s *Server) paymentQR(ctx context.Context, _ *mcp.CallToolRequest, in payme
 			docIDs = append(docIDs, strconv.FormatInt(d.ID, 10))
 			currency = d.Currency
 		}
-		code := map[string]any{"documents": docs, "amount": total, "currency": currency}
+		code := map[string]any{"documents": docs, "amount": round2(total), "currency": currency}
 		if s.opts.DownloadDir != "" {
-			path, err := s.saveFile(safeFileName("qr", strings.Join(docIDs, "-")+".png"), png)
+			path, err := s.saveFile(qrFileName(docIDs), png)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -116,6 +118,19 @@ func (s *Server) paymentQR(ctx context.Context, _ *mcp.CallToolRequest, in payme
 	}
 	res.Content = append([]mcp.Content{&mcp.TextContent{Text: string(b)}}, res.Content...)
 	return res, out, nil
+}
+
+// maxQRNameIDs is how many document ids a QR code's file name lists before it uses a hash.
+const maxQRNameIDs = 5
+
+// qrFileName names a QR code's file after its documents, or a hash of them when there are many.
+func qrFileName(ids []string) string {
+	name := strings.Join(ids, "-")
+	if len(ids) > maxQRNameIDs {
+		sum := sha256.Sum256([]byte(name))
+		name = hex.EncodeToString(sum[:6])
+	}
+	return safeFileName("qr", name+".png")
 }
 
 // lastMonth is the first and last day of the month before now.
@@ -146,6 +161,12 @@ func (s *Server) compareCosts(ctx context.Context, _ *mcp.CallToolRequest, in co
 			return nil, nil, errors.New("from must be YYYY-MM-DD")
 		}
 		to = time.Date(f.Year(), f.Month()+1, 0, 0, 0, 0, 0, time.UTC).Format(dateLayout)
+	case from == "":
+		t, err := time.Parse(dateLayout, to)
+		if err != nil {
+			return nil, nil, errors.New("to must be YYYY-MM-DD")
+		}
+		from = time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC).Format(dateLayout)
 	}
 	from, to, err = s.dateRange(from, to)
 	if err != nil {

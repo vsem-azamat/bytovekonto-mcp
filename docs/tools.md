@@ -23,11 +23,11 @@ Dates are `YYYY-MM-DD`; times are as the API sends them (ISO 8601, mostly UTC). 
 | `download_document` | `id` | The file, saved in the download directory (path in `saved_to`) and returned inline as an embedded resource when at most 4 MiB; the result is also given as text |
 | `notifications` | – | In-app notifications as the API sends them, and the unread count |
 | `payment_qr` | `ids` (default: every document still to pay) | A Czech QR payment code for the documents, as the PNG image inline and saved in the download directory (`saved_to`), with the documents and the amount. The API's `POST /app/payments/multiQR` makes it; nothing is paid. |
-| `compare_costs` | `from` (default the first day of last month), `to` (default the end of the month of `from`); `granularity` day, week, month (default) | Per delivery: the cost and consumption in the period (`data_complete` false while the API has no data for it yet), compared with the previous period, the same period a year ago, the building's average and the average of all buildings; a comparison the API cannot make says so with its note. The averages are as the API computes them. |
+| `compare_costs` | `from`, `to` (default last month; with only one of them, the whole month of it); `granularity` day, week, month (default) | Per delivery: the cost and consumption in the period (`data_complete` false while the API has no data for it yet), compared with the previous period, the same period a year ago, the building's average and the average of all buildings; a comparison the API cannot make says so with its note. The averages are as the API computes them. |
 
 ## Writing
 
-Both write tools return a preview and send nothing unless `confirm` is true; see [safety.md](safety.md). Both take `attachments`: up to 5 photos or PDFs (10 MiB each, 20 MiB together), each either `{"path": …}`, an absolute path inside a directory `BYTOVEKONTO_ATTACH_DIRS` allows, or `{"name": …, "content_base64": …}`. The preview lists each file's name, type, size and the start of its SHA-256. An identical ticket subject or comment sent in the last 15 minutes makes the preview warn and the confirmed call fail.
+Both write tools return a preview and send nothing unless `confirm` is true; see [safety.md](safety.md). Both take `attachments`: up to 5 photos or PDFs (10 MiB each, 20 MiB together), each either `{"path": …}`, an absolute path inside a directory `BYTOVEKONTO_ATTACH_DIRS` allows, or `{"name": …, "content_base64": …}`. The preview lists each file's name, type, size and the start of its SHA-256. An identical ticket subject or own comment sent in the last 15 minutes makes the preview warn and the confirmed call fail.
 
 | Tool | Arguments | Sends |
 | --- | --- | --- |

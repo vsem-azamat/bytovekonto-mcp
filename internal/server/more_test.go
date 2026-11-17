@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -130,21 +131,37 @@ func TestAttachments(t *testing.T) {
 	if err := os.WriteFile(text, []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	writes := h.fake.WriteCount()
-	bad := []any{
-		map[string]any{"path": outside},
-		map[string]any{"path": link},
-		map[string]any{"path": filepath.Join(h.attach, "..", filepath.Base(filepath.Dir(outside)), "secret.png")},
-		map[string]any{"path": "plate.png"},
-		map[string]any{"path": text},
-		map[string]any{"content_base64": "bm90IGFuIGltYWdl"},
-		map[string]any{"name": "x.png", "content_base64": "%%%"},
-		map[string]any{"path": inside, "name": "x.png", "content_base64": base64.StdEncoding.EncodeToString(png)},
+	fifo := filepath.Join(h.attach, "pipe.png")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	for _, a := range bad {
-		if _, errText := h.call(t, "comment_ticket", map[string]any{"ticket_id": 3001, "message": "x", "attachments": []any{a}, "confirm": true}); errText == "" {
-			t.Errorf("accepted attachment %v", a)
+	writes := h.fake.WriteCount()
+	notImage := base64.StdEncoding.EncodeToString([]byte("not an image at all"))
+	bad := []struct {
+		a    map[string]any
+		want string
+	}{
+		{map[string]any{"path": outside}, "not inside"},
+		{map[string]any{"path": link}, "cannot read"},
+		{map[string]any{"path": "plate.png"}, "absolute"},
+		{map[string]any{"path": text}, "only photos"},
+		{map[string]any{"path": text, "name": "notes.heic"}, "only photos"},
+		{map[string]any{"name": "fake.heic", "content_base64": notImage}, "only photos"},
+		{map[string]any{"path": fifo}, "not a regular file"},
+		{map[string]any{"content_base64": notImage}, "name is required"},
+		{map[string]any{"name": "x.png", "content_base64": "%%%"}, "not standard base64"},
+		{map[string]any{"path": inside, "name": "x.png", "content_base64": notImage}, "not both"},
+	}
+	for _, c := range bad {
+		_, errText := h.call(t, "comment_ticket", map[string]any{"ticket_id": 3001, "message": "x", "attachments": []any{c.a}, "confirm": true})
+		if !strings.Contains(errText, c.want) {
+			t.Errorf("attachment %v: error %q, want %q", c.a, errText, c.want)
 		}
+	}
+	heic := append([]byte{0, 0, 0, 24}, []byte("ftypheic\x00\x00\x00\x00mif1heic")...)
+	out = mustCall(t, h, "comment_ticket", map[string]any{"ticket_id": 3001, "message": "HEIC", "attachments": []any{map[string]any{"name": "IMG_1.HEIC", "content_base64": base64.StdEncoding.EncodeToString(heic)}}})
+	if typ := out["preview"].(map[string]any)["attachments"].([]any)[0].(map[string]any)["type"]; typ != "image/heic" {
+		t.Errorf("HEIC type = %v", typ)
 	}
 	six := []any{inline, inline, inline, inline, inline, inline}
 	if _, errText := h.call(t, "comment_ticket", map[string]any{"ticket_id": 3001, "message": "x", "attachments": six, "confirm": true}); !strings.Contains(errText, "at most") {
@@ -192,5 +209,12 @@ func TestDuplicateCommentIsRefused(t *testing.T) {
 	mustCall(t, h, "comment_ticket", args)
 	if h.fake.WriteCount() != 1 {
 		t.Errorf("writes = %d, want only the different message", h.fake.WriteCount())
+	}
+	// the same words from someone else do not block the user's answer
+	h.fake.SetFixture("/tickets/3001/lifecycle", `{"comments":[{"id":9,"createdAt":"`+at+`","creatorSubjectId":21,"creatorSubjectName":"Tom Technician","text":"Thanks.","deletedAt":null}],"history":[]}`)
+	args["message"] = "Thanks."
+	mustCall(t, h, "comment_ticket", args)
+	if h.fake.WriteCount() != 2 {
+		t.Error("the user's answer was refused because someone else wrote the same")
 	}
 }

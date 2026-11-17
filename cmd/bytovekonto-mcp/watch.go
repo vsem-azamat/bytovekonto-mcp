@@ -57,7 +57,7 @@ func watchCmd(ctx context.Context, cfg config, log *slog.Logger, args []string, 
 		log.Error("cannot start", "err", err.Error())
 		return 1
 	}
-	w := &watch.Watcher{API: client, StateFile: filepath.Join(cfg.stateDir, watchStateFile)}
+	w := &watch.Watcher{API: client, StateFile: filepath.Join(cfg.stateDir, watchStateFile), Log: log.With("component", "watch")}
 	sink := printSink(stdout)
 	if *execCmd != "" {
 		sink = execSink(*execCmd, stderr)
