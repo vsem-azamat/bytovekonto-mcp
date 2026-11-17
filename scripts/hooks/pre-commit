@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fast checks before a commit; `make check` runs everything CI runs.
+set -euo pipefail
+make --no-print-directory repo lint
